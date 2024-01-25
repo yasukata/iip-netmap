@@ -25,7 +25,9 @@
 
 #include <libnetmap.h>
 
-#if defined(__FreeBSD__)
+#if defined(__linux__)
+#include <sched.h>
+#elif defined(__FreeBSD__)
 #include <pthread_np.h>
 #include <sys/cpuset.h>
 #define cpu_set_t cpuset_t
