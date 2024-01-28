@@ -490,17 +490,24 @@ static void iip_ops_nic_offload_udp_tx_tso_mark(void *m, void *opaque)
 
 static volatile uint16_t setup_core_id = 0;
 
+struct __thread_info {
+	pthread_t th;
+	uint16_t id;
+	void *app_global_opaque;
+};
+
 /* thread loop */
 static void *__thread_fn(void *__data)
 {
+	struct __thread_info *ti = (struct __thread_info *) __data;
 	{
 		cpu_set_t cs;
 		CPU_ZERO(&cs);
-		CPU_SET(*((uint16_t *) __data), &cs);
+		CPU_SET(ti->id, &cs);
 		assert(pthread_setaffinity_np(pthread_self(), sizeof(cs), &cs) == 0);
 	}
 
-	while (*((uint16_t *) __data) != setup_core_id)
+	while (ti->id != setup_core_id)
 		usleep(10000);
 
 	{
@@ -525,40 +532,48 @@ static void *__thread_fn(void *__data)
 				{ /* associate memory for tcp connection */
 					uint16_t i;
 					for (i = 0; i < NUM_NETSTACK_PB; i++)
-						__iip_enqueue_obj(io_opaque[*((uint16_t *) __data)].netmap.pool.p[0], (struct __npb *) &_premem[2][i * sizeof(struct __npb)], 0);
+						__iip_enqueue_obj(io_opaque[ti->id].netmap.pool.p[0], (struct __npb *) &_premem[2][i * sizeof(struct __npb)], 0);
 				}
-				io_opaque[*((uint16_t *) __data)].core_id = *((uint16_t *) __data);
-				if (!*((uint16_t *) __data)) {
+				io_opaque[ti->id].core_id = ti->id;
+				if (!ti->id) {
 					assert(!__iosub_nmd);
-					assert((io_opaque[*((uint16_t *) __data)].netmap.nmd = __iosub_nmd = nmport_prepare(__iosub_ifname)) != NULL);
-					assert(!nmport_offset(io_opaque[*((uint16_t *) __data)].netmap.nmd, sizeof(struct __bufhead), sizeof(struct __bufhead) + 1500, 64, 0)); /* preserve head room */
-					io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_rx_slots = NUM_RX_DESC;
-					io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_tx_slots = NUM_TX_DESC;
-					io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_rx_rings = io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_tx_rings = __iosub_num_cores;
-					io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_extra_bufs = NUM_BUF - NUM_RX_DESC - NUM_TX_DESC;
-					io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_mode = NR_REG_ONE_NIC;
-					/* io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_flags |= NR_ACCEPT_VNET_HDR; */
+					assert((io_opaque[ti->id].netmap.nmd = __iosub_nmd = nmport_prepare(__iosub_ifname)) != NULL);
+					assert(!nmport_offset(io_opaque[ti->id].netmap.nmd, sizeof(struct __bufhead), sizeof(struct __bufhead) + 1500, 64, 0)); /* preserve head room */
+					io_opaque[ti->id].netmap.nmd->reg.nr_rx_slots = NUM_RX_DESC;
+					io_opaque[ti->id].netmap.nmd->reg.nr_tx_slots = NUM_TX_DESC;
+					io_opaque[ti->id].netmap.nmd->reg.nr_rx_rings = io_opaque[ti->id].netmap.nmd->reg.nr_tx_rings = __iosub_num_cores;
+					io_opaque[ti->id].netmap.nmd->reg.nr_extra_bufs = NUM_BUF - NUM_RX_DESC - NUM_TX_DESC;
+					io_opaque[ti->id].netmap.nmd->reg.nr_mode = NR_REG_ONE_NIC;
+					/* io_opaque[ti->id].netmap.nmd->reg.nr_flags |= NR_ACCEPT_VNET_HDR; */
 				} else {
 					assert(__iosub_nmd);
-					assert((io_opaque[*((uint16_t *) __data)].netmap.nmd = nmport_clone(__iosub_nmd)) != NULL);
+					assert((io_opaque[ti->id].netmap.nmd = nmport_clone(__iosub_nmd)) != NULL);
 				}
-				io_opaque[*((uint16_t *) __data)].netmap.nmd->reg.nr_ringid = *((uint16_t *) __data) & NETMAP_RING_MASK;
-				assert(nmport_open_desc(io_opaque[*((uint16_t *) __data)].netmap.nmd) >= 0);
+				io_opaque[ti->id].netmap.nmd->reg.nr_ringid = ti->id & NETMAP_RING_MASK;
+				assert(nmport_open_desc(io_opaque[ti->id].netmap.nmd) >= 0);
 
 				setup_core_id++;
 
 				{ /* call app thread init */
-					void *opaque[2] = { (void *) &io_opaque[*((uint16_t *) __data)], NULL, };
+					void *opaque[3] = { (void *) &io_opaque[ti->id], ti->app_global_opaque, NULL, };
+					{
+						struct netmap_ring *tx_ring = NETMAP_TXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id);
+						{
+							uint32_t i;
+							for (i = 0; i < tx_ring->num_slots; i++)
+								((struct __bufhead *) NETMAP_BUF(tx_ring, tx_ring->slot[i].buf_idx))->ref = 1;
+						}
+					}
 					{
 						uint32_t j, k;
-						for (j = 0, k = io_opaque[*((uint16_t *) __data)].netmap.nmd->nifp->ni_bufs_head; k; j++, k = *(uint32_t *)(NETMAP_BUF(NETMAP_RXRING(io_opaque[*((uint16_t *) __data)].netmap.nmd->nifp, *((uint16_t *) __data)), k))) {
+						for (j = 0, k = io_opaque[ti->id].netmap.nmd->nifp->ni_bufs_head; k; j++, k = *(uint32_t *)(NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))) {
 							assert(j < NUM_BUF);
-							((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(io_opaque[*((uint16_t *) __data)].netmap.nmd->nifp, *((uint16_t *) __data)), k))->ref = 1;
+							((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))->ref = 1;
 							__iip_buf_free(k, opaque);
 						}
 					}
 					{
-						opaque[1] = __app_thread_init(workspace, *((uint16_t *) __data), opaque);
+						opaque[2] = __app_thread_init(workspace, ti->id, opaque);
 						{
 							uint64_t prev_print = 0;
 							do {
@@ -567,7 +582,7 @@ static void *__thread_fn(void *__data)
 									struct __npb *m[ETH_RX_BATCH] = { 0 };
 									uint32_t cnt = 0;
 									{
-										struct netmap_ring *rx_ring = NETMAP_RXRING(io_opaque[*((uint16_t *) __data)].netmap.nmd->nifp, *((uint16_t *) __data));
+										struct netmap_ring *rx_ring = NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id);
 										{
 											uint32_t i = 0, j = rx_ring->head, k = rx_ring->tail;
 											while (i < ETH_RX_BATCH && j != k) {
@@ -587,7 +602,7 @@ static void *__thread_fn(void *__data)
 										}
 									}
 									if (cnt)
-										io_opaque[*((uint16_t *) __data)].stat[stat_idx].eth.rx_pkt += cnt;
+										io_opaque[ti->id].stat[stat_idx].eth.rx_pkt += cnt;
 									{ /* execute network stack */
 										uint32_t _next_us = 1000000U;
 										iip_run(workspace, mac_addr, ip4_addr_be, (void **) m, cnt, &_next_us, opaque);
@@ -599,7 +614,7 @@ static void *__thread_fn(void *__data)
 									__app_loop(mac_addr, ip4_addr_be, &_next_us, opaque);
 									next_us = _next_us < next_us ? _next_us : next_us;
 								}
-								if (!*((uint16_t *) __data)) {
+								if (!ti->id) {
 									struct timespec ts;
 									assert(!clock_gettime(CLOCK_REALTIME, &ts));
 									if (prev_print + 1000000000UL < ts.tv_sec * 1000000000UL + ts.tv_nsec) {
@@ -630,7 +645,7 @@ static void *__thread_fn(void *__data)
 								}
 								{
 									struct pollfd pollfd = {
-										.fd = io_opaque[*((uint16_t *) __data)].netmap.nmd->fd,
+										.fd = io_opaque[ti->id].netmap.nmd->fd,
 										.events = POLLIN,
 									};
 									assert(poll(&pollfd, 1, (next_us / 1000)) != -1);
@@ -639,7 +654,7 @@ static void *__thread_fn(void *__data)
 						}
 					}
 				}
-				nmport_close(io_opaque[*((uint16_t *) __data)].netmap.nmd);
+				nmport_close(io_opaque[ti->id].netmap.nmd);
 			}
 			free(_premem[2]);
 			free(_premem[1]);
@@ -786,22 +801,23 @@ static int __iosub_main(int argc, char *const *argv)
 		}
 	}
 
-	__app_init(argc, argv);
-
 	{
-		pthread_t th[MAX_THREAD];
-		uint16_t id[MAX_THREAD];
+		void *app_global_opaque = __app_init(argc, argv);
 		{
-			uint16_t i;
-			for (i = 0; i < __iosub_num_cores; i++) {
-				id[i] = i;
-				assert(!pthread_create(&th[i], NULL, __thread_fn, &id[i]));
+			struct __thread_info ti[MAX_THREAD];
+			{
+				uint16_t i;
+				for (i = 0; i < __iosub_num_cores; i++) {
+					ti[i].id = i;
+					ti[i].app_global_opaque = app_global_opaque;
+					assert(!pthread_create(&ti[i].th, NULL, __thread_fn, &ti[i]));
+				}
 			}
-		}
-		{
-			uint16_t i;
-			for (i = 0; i < __iosub_num_cores; i++)
-				assert(!pthread_join(th[i], NULL));
+			{
+				uint16_t i;
+				for (i = 0; i < __iosub_num_cores; i++)
+					assert(!pthread_join(ti[i].th, NULL));
+			}
 		}
 	}
 
