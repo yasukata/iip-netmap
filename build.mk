@@ -5,4 +5,4 @@ CFLAGS += -D_GNU_SOURCE
 CFLAGS += -I$(NETMAP_DIR)/libnetmap -I$(NETMAP_DIR)/sys
 LDFLAGS += -L$(NETMAP_DIR)/build-libnetmap
 endif
-LDFLAGS += -lnetmap
+LDFLAGS += -lnetmap -lpthread
