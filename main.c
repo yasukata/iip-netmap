@@ -552,7 +552,6 @@ static void *__thread_fn(void *__data)
 				if (!ti->id) {
 					assert(!__iosub_nmd);
 					assert((io_opaque[ti->id].netmap.nmd = __iosub_nmd = nmport_prepare(__iosub_ifname)) != NULL);
-					assert(!nmport_offset(io_opaque[ti->id].netmap.nmd, sizeof(struct __bufhead), sizeof(struct __bufhead) + 1500, 64, 0)); /* preserve head room */
 					io_opaque[ti->id].netmap.nmd->reg.nr_rx_slots = NUM_RX_DESC;
 					io_opaque[ti->id].netmap.nmd->reg.nr_tx_slots = NUM_TX_DESC;
 					io_opaque[ti->id].netmap.nmd->reg.nr_rx_rings = io_opaque[ti->id].netmap.nmd->reg.nr_tx_rings = __iosub_num_cores;
@@ -563,6 +562,7 @@ static void *__thread_fn(void *__data)
 					assert(__iosub_nmd);
 					assert((io_opaque[ti->id].netmap.nmd = nmport_clone(__iosub_nmd)) != NULL);
 				}
+				assert(!nmport_offset(io_opaque[ti->id].netmap.nmd, sizeof(struct __bufhead), sizeof(struct __bufhead), 64, 0)); /* preserve head room */
 				io_opaque[ti->id].netmap.nmd->reg.nr_ringid = ti->id & NETMAP_RING_MASK;
 				assert(nmport_open_desc(io_opaque[ti->id].netmap.nmd) >= 0);
 
