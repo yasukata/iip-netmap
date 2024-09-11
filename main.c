@@ -111,6 +111,8 @@ static const char *__iosub_ifname = NULL;
 static uint16_t __iosub_num_cores = 0;
 static uint16_t __iosub_core_list[__IOSUB_MAX_CORE];
 
+static int32_t __iosub_max_poll_wait_ms = 1000U; /* 1 sec */
+
 static uint16_t helper_ip4_get_connection_affinity(uint16_t protocol, uint32_t local_ip4_be, uint16_t local_port_be, uint32_t peer_ip4_be, uint16_t peer_port_be, void *opaque)
 {
 	return 0;
@@ -589,7 +591,7 @@ static void *__thread_fn(void *__data)
 						{
 							uint64_t prev_print = 0;
 							do {
-								uint32_t next_us = 1000000U; /* 1 sec */
+								uint32_t next_us = __iosub_max_poll_wait_ms * 1000;
 								{
 									struct __npb *m[ETH_RX_BATCH] = { 0 };
 									uint32_t cnt = 0;
@@ -615,6 +617,8 @@ static void *__thread_fn(void *__data)
 									}
 									if (cnt)
 										io_opaque[ti->id].stat[stat_idx].eth.rx_pkt += cnt;
+									if (cnt)
+										next_us = 0;
 									{ /* execute network stack */
 										uint32_t _next_us = 1000000U;
 										iip_run(workspace, mac_addr, ip4_addr_be, (void **) m, cnt, &_next_us, opaque);
@@ -682,7 +686,7 @@ static int __iosub_main(int argc, char *const *argv)
 {
 	{
 		int ch;
-		while ((ch = getopt(argc, argv, "a:i:l:")) != -1) {
+		while ((ch = getopt(argc, argv, "a:e:i:l:")) != -1) {
 			switch (ch) {
 			case 'a':
 				{ /* format: mac,ip (e.g., ab:cd:ef:01:23:45,192.168.0.1 */
@@ -720,6 +724,9 @@ static int __iosub_main(int argc, char *const *argv)
 								(ip4_addr_be >> 24) & 0xff);
 					}
 				}
+				break;
+			case 'e':
+				assert(sscanf(optarg, "%d", &__iosub_max_poll_wait_ms) == 1);
 				break;
 			case 'i':
 				__iosub_ifname = optarg;
