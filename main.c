@@ -570,7 +570,22 @@ static void *__thread_fn(void *__data)
 
 				{ /* call app thread init */
 					void *opaque[3] = { (void *) &io_opaque[ti->id], ti->app_global_opaque, NULL, };
-					{
+					{ /* zero clear the reference count */
+						uint32_t j, k;
+						for (j = 0, k = io_opaque[ti->id].netmap.nmd->nifp->ni_bufs_head; k; j++, k = *(uint32_t *)(NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))) {
+							assert(j < NUM_BUF);
+							((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))->ref = 0;
+						}
+					}
+					{ /* reference count setting for buffers associated with the ring */
+						struct netmap_ring *rx_ring = NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id);
+						{
+							uint32_t i;
+							for (i = 0; i < rx_ring->num_slots; i++)
+								((struct __bufhead *) NETMAP_BUF(rx_ring, rx_ring->slot[i].buf_idx))->ref = 1;
+						}
+					}
+					{ /* reference count setting for buffers associated with the ring */
 						struct netmap_ring *tx_ring = NETMAP_TXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id);
 						{
 							uint32_t i;
@@ -578,11 +593,11 @@ static void *__thread_fn(void *__data)
 								((struct __bufhead *) NETMAP_BUF(tx_ring, tx_ring->slot[i].buf_idx))->ref = 1;
 						}
 					}
-					{
+					{ /* add reference and release; the buffers assocaited with the rings will not be reclaimed */
 						uint32_t j, k;
 						for (j = 0, k = io_opaque[ti->id].netmap.nmd->nifp->ni_bufs_head; k; j++, k = *(uint32_t *)(NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))) {
 							assert(j < NUM_BUF);
-							((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))->ref = 1;
+							((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))->ref++;
 							__iip_buf_free(k, opaque);
 						}
 					}
@@ -600,7 +615,7 @@ static void *__thread_fn(void *__data)
 										{
 											uint32_t i = 0, j = rx_ring->head, k = rx_ring->tail;
 											while (i < ETH_RX_BATCH && j != k) {
-												((struct __bufhead *) NETMAP_BUF(rx_ring, rx_ring->slot[j].buf_idx))->ref = 1; /* XXX: overwrite */
+												assert(((struct __bufhead *) NETMAP_BUF(rx_ring, rx_ring->slot[j].buf_idx))->ref == 1);
 												assert((m[i] = __iip_ops_pkt_alloc(opaque)) != NULL);
 												m[i]->buf_idx = rx_ring->slot[j].buf_idx;
 												m[i]->len = rx_ring->slot[j].len;
