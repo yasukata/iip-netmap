@@ -41,7 +41,7 @@
 #ifndef NUM_TX_DESC
 #define NUM_TX_DESC NUM_RX_DESC
 #endif
-#define NUM_BUF ((NUM_RX_DESC + NUM_TX_DESC) * 4)
+#define NUM_BUF (4096 > ((NUM_RX_DESC + NUM_TX_DESC) * 4) ? 4096 : ((NUM_RX_DESC + NUM_TX_DESC) * 4))
 #ifndef NUM_NETSTACK_PB
 #define NUM_NETSTACK_PB (8192)
 #endif
