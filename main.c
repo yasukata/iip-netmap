@@ -326,23 +326,33 @@ static void iip_ops_l2_flush(void *opaque)
 		{
 			struct netmap_ring *tx_ring = NETMAP_TXRING(iop->netmap.nmd->nifp, iop->core_id);
 			{
-				uint32_t i = 0, j = tx_ring->head, k = tx_ring->tail;
-				while (nm_ring_next(tx_ring, j) != k && i < iop->eth.tx.num_pkt) {
-					__iip_buf_free(tx_ring->slot[j].buf_idx, opaque);
-					tx_ring->slot[j].buf_idx = iop->eth.tx.m[i]->buf_idx;
-					tx_ring->slot[j].len = iop->eth.tx.m[i]->len;
-					tx_ring->slot[j].ptr = iop->eth.tx.m[i]->head;
-					tx_ring->slot[j].flags |= NS_BUF_CHANGED;
-					__iip_pkt_free(iop->eth.tx.m[i], opaque);
-					i++;
-					j = nm_ring_next(tx_ring, j);
+				uint32_t i = 0;
+				{
+					uint32_t j_prev = 0, j = tx_ring->head, k = tx_ring->tail;
+					while (nm_ring_next(tx_ring, j) != k && i < iop->eth.tx.num_pkt) {
+						__iip_buf_free(tx_ring->slot[j].buf_idx, opaque);
+						tx_ring->slot[j].buf_idx = iop->eth.tx.m[i]->buf_idx;
+						tx_ring->slot[j].len = iop->eth.tx.m[i]->len;
+						tx_ring->slot[j].ptr = iop->eth.tx.m[i]->head;
+						tx_ring->slot[j].flags |= NS_BUF_CHANGED;
+						__iip_pkt_free(iop->eth.tx.m[i], opaque);
+						i++;
+						j_prev = j;
+						j = nm_ring_next(tx_ring, j);
+					}
+					if (i)
+						tx_ring->slot[j_prev].flags |= NS_REPORT;
+					tx_ring->head = tx_ring->cur = j;
+					assert(!ioctl(iop->netmap.nmd->fd, NIOCTXSYNC, NULL));
 				}
-				assert(i == iop->eth.tx.cnt);
-				tx_ring->head = tx_ring->cur = j;
+				if (i != iop->eth.tx.cnt) {
+					uint32_t j;
+					for (j = i; j < iop->eth.tx.cnt; j++)
+						__iip_pkt_free(iop->eth.tx.m[j], opaque);
+				}
+				iop->stat[stat_idx].eth.tx_pkt += i;
 			}
 		}
-		assert(!ioctl(iop->netmap.nmd->fd, NIOCTXSYNC, NULL));
-		iop->stat[stat_idx].eth.tx_pkt += iop->eth.tx.num_pkt;
 		iop->eth.tx.cnt = iop->eth.tx.num_pkt = 0;
 	}
 }
