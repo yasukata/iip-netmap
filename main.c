@@ -246,7 +246,19 @@ static void __iip_pkt_free(void *pkt, void *opaque)
 	void **opaque_array = (void **) opaque;
 	struct io_opaque *iop = (struct io_opaque *) opaque_array[0];
 	memset(pkt, 0, sizeof(struct __npb));
-	__iip_enqueue_obj(iop->netmap.pool.p[0], (struct __npb *) pkt, 0);
+#define __iip_enqueue_obj_top(__queue, __obj, __x) \
+	do { \
+		(__obj)->prev[__x] = (__obj)->next[__x] = NULL; \
+		if (!((__queue)[0])) { \
+			(__queue)[0] = (__queue)[1] = (__obj); \
+		} else { \
+			(__queue)[0]->prev[__x] = (__obj); \
+			(__obj)->next[__x] = (__queue)[0]; \
+			(__queue)[0] = (__obj); \
+		} \
+	} while (0)
+	__iip_enqueue_obj_top(iop->netmap.pool.p[0], (struct __npb *) pkt, 0);
+#undef __iip_enqueue_obj_top
 }
 
 static void iip_ops_pkt_free(void *pkt, void *opaque)
