@@ -59,10 +59,9 @@
 #error "too large max chain and batch"
 #endif
 
-struct __bufhead {
-	uint64_t __space;
-	uint64_t ref;
-};
+#define __NUM_BUF_DOUBLE (NUM_BUF * 2)
+#define __IOSUB_BUF_ASSERT(__iop, __buf_idx) do { assert((__buf_idx) < (__NUM_BUF_DOUBLE)); } while (0)
+#define __IOSUB_BUF_REFCNT(__iop, __buf_idx) ((__iop)->netmap.buf_ref[__buf_idx])
 
 struct __npb {
 	uint32_t buf_idx;
@@ -76,6 +75,7 @@ struct io_opaque {
 	uint16_t core_id;
 	struct {
 		struct nmport_d *nmd;
+		uint16_t buf_ref[__NUM_BUF_DOUBLE];
 		uint32_t free_buf_cnt;
 		uint32_t free_buf_idx[NUM_BUF];
 		struct {
@@ -203,7 +203,8 @@ static void __iip_buf_free(uint32_t buf_idx, void *opaque)
 {
 	void **opaque_array = (void **) opaque;
 	struct io_opaque *iop = (struct io_opaque *) opaque_array[0];
-	if (--((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(iop->netmap.nmd->nifp, iop->core_id), buf_idx))->ref == 0)
+	__IOSUB_BUF_ASSERT(iop, buf_idx);
+	if (--__IOSUB_BUF_REFCNT(iop, buf_idx) == 0)
 		iop->netmap.free_buf_idx[iop->netmap.free_buf_cnt++] = buf_idx;
 }
 
@@ -213,8 +214,8 @@ static uint32_t __iip_buf_alloc(void *opaque)
 	struct io_opaque *iop = (struct io_opaque *) opaque_array[0];
 	if (iop->netmap.free_buf_cnt) {
 		uint32_t buf_idx = iop->netmap.free_buf_idx[--iop->netmap.free_buf_cnt];
-		assert(((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(iop->netmap.nmd->nifp, iop->core_id), buf_idx))->ref == 0);
-		((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(iop->netmap.nmd->nifp, iop->core_id), buf_idx))->ref = 1;
+		__IOSUB_BUF_ASSERT(iop, buf_idx);
+		assert(++__IOSUB_BUF_REFCNT(iop, buf_idx) == 1);
 		return buf_idx;
 	} else
 		return UINT32_MAX;
@@ -237,7 +238,7 @@ static void *iip_ops_pkt_alloc(void *opaque)
 	struct __npb *p = __iip_ops_pkt_alloc(opaque);
 	p->buf_idx = __iip_buf_alloc(opaque);
 	assert(p->buf_idx != UINT32_MAX);
-	p->head = sizeof(struct __bufhead);
+	p->head = 0;
 	return p;
 }
 
@@ -305,13 +306,14 @@ static void *iip_ops_pkt_clone(void *pkt, void *opaque)
 {
 	void **opaque_array = (void **) opaque;
 	struct io_opaque *iop = (struct io_opaque *) opaque_array[0];
-	assert(((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(iop->netmap.nmd->nifp, iop->core_id), ((struct __npb *) pkt)->buf_idx))->ref);
+	__IOSUB_BUF_ASSERT(iop, ((struct __npb *) pkt)->buf_idx);
+	assert(__IOSUB_BUF_REFCNT(iop, ((struct __npb *) pkt)->buf_idx));
 	{
 		struct __npb *p = __iip_ops_pkt_alloc(opaque);
 		p->buf_idx = ((struct __npb *) pkt)->buf_idx;
 		p->len = ((struct __npb *) pkt)->len;
 		p->head = ((struct __npb *) pkt)->head;
-		((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(iop->netmap.nmd->nifp, iop->core_id), ((struct __npb *) pkt)->buf_idx))->ref++;
+		__IOSUB_BUF_REFCNT(iop, ((struct __npb *) pkt)->buf_idx)++;
 		return p;
 	}
 }
@@ -584,7 +586,6 @@ static void *__thread_fn(void *__data)
 					assert(__iosub_nmd);
 					assert((io_opaque[ti->id].netmap.nmd = nmport_clone(__iosub_nmd)) != NULL);
 				}
-				assert(!nmport_offset(io_opaque[ti->id].netmap.nmd, sizeof(struct __bufhead), sizeof(struct __bufhead), 64, 0)); /* preserve head room */
 				io_opaque[ti->id].netmap.nmd->reg.nr_ringid = ti->id & NETMAP_RING_MASK;
 				assert(nmport_open_desc(io_opaque[ti->id].netmap.nmd) >= 0);
 
@@ -592,19 +593,12 @@ static void *__thread_fn(void *__data)
 
 				{ /* call app thread init */
 					void *opaque[3] = { (void *) &io_opaque[ti->id], ti->app_global_opaque, NULL, };
-					{ /* zero clear the reference count */
-						uint32_t j, k;
-						for (j = 0, k = io_opaque[ti->id].netmap.nmd->nifp->ni_bufs_head; k; j++, k = *(uint32_t *)(NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))) {
-							assert(j < NUM_BUF);
-							((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))->ref = 0;
-						}
-					}
 					{ /* reference count setting for buffers associated with the ring */
 						struct netmap_ring *rx_ring = NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id);
 						{
 							uint32_t i;
 							for (i = 0; i < rx_ring->num_slots; i++)
-								((struct __bufhead *) NETMAP_BUF(rx_ring, rx_ring->slot[i].buf_idx))->ref = 1;
+								io_opaque[ti->id].netmap.buf_ref[rx_ring->slot[i].buf_idx] = 1;
 						}
 					}
 					{ /* reference count setting for buffers associated with the ring */
@@ -612,14 +606,14 @@ static void *__thread_fn(void *__data)
 						{
 							uint32_t i;
 							for (i = 0; i < tx_ring->num_slots; i++)
-								((struct __bufhead *) NETMAP_BUF(tx_ring, tx_ring->slot[i].buf_idx))->ref = 1;
+								io_opaque[ti->id].netmap.buf_ref[tx_ring->slot[i].buf_idx] = 1;
 						}
 					}
 					{ /* add reference and release; the buffers assocaited with the rings will not be reclaimed */
 						uint32_t j, k;
 						for (j = 0, k = io_opaque[ti->id].netmap.nmd->nifp->ni_bufs_head; k; j++, k = *(uint32_t *)(NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))) {
 							assert(j < NUM_BUF);
-							((struct __bufhead *) NETMAP_BUF(NETMAP_RXRING(io_opaque[ti->id].netmap.nmd->nifp, ti->id), k))->ref++;
+							io_opaque[ti->id].netmap.buf_ref[k] = 1;
 							__iip_buf_free(k, opaque);
 						}
 					}
@@ -637,7 +631,8 @@ static void *__thread_fn(void *__data)
 										{
 											uint32_t i = 0, j = rx_ring->head, k = rx_ring->tail;
 											while (i < ETH_RX_BATCH && j != k) {
-												assert(((struct __bufhead *) NETMAP_BUF(rx_ring, rx_ring->slot[j].buf_idx))->ref == 1);
+												__IOSUB_BUF_ASSERT(&io_opaque[ti->id], rx_ring->slot[j].buf_idx);
+												assert(__IOSUB_BUF_REFCNT(&io_opaque[ti->id], rx_ring->slot[j].buf_idx) == 1);
 												assert((m[i] = __iip_ops_pkt_alloc(opaque)) != NULL);
 												m[i]->buf_idx = rx_ring->slot[j].buf_idx;
 												m[i]->len = rx_ring->slot[j].len;
