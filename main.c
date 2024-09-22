@@ -59,7 +59,7 @@
 #error "too large max chain and batch"
 #endif
 
-#define __NUM_BUF_DOUBLE (NUM_BUF * 2)
+#define __NUM_BUF_DOUBLE (NUM_BUF * 2 * __IOSUB_MAX_CORE)
 #define __IOSUB_BUF_ASSERT(__iop, __buf_idx) do { assert((__buf_idx) < (__NUM_BUF_DOUBLE)); } while (0)
 #define __IOSUB_BUF_REFCNT(__iop, __buf_idx) ((__iop)->netmap.buf_ref[__buf_idx])
 
