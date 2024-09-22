@@ -353,7 +353,7 @@ static void iip_ops_l2_flush(void *opaque)
 				if (i != iop->eth.tx.cnt) {
 					uint32_t j;
 					for (j = i; j < iop->eth.tx.cnt; j++)
-						__iip_pkt_free(iop->eth.tx.m[j], opaque);
+						iip_ops_pkt_free(iop->eth.tx.m[j], opaque);
 				}
 				iop->stat[stat_idx].eth.tx_pkt += i;
 			}
