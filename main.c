@@ -681,13 +681,14 @@ static void *__thread_fn(void *__data)
 										prev_print = ts.tv_sec * 1000000000UL + ts.tv_nsec;
 									}
 								}
-								{
+								if (next_us) {
 									struct pollfd pollfd = {
 										.fd = io_opaque[ti->id].netmap.nmd->fd,
 										.events = POLLIN,
 									};
 									assert(poll(&pollfd, 1, (next_us / 1000)) != -1);
-								}
+								} else
+									assert(ioctl(io_opaque[ti->id].netmap.nmd->fd, NIOCRXSYNC, NULL) != -1);
 							} while (!__app_should_stop(opaque));
 						}
 					}
